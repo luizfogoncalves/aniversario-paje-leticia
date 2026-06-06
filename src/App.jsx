@@ -28,6 +28,7 @@ import {
   Sparkles,
   TimerOff,
   Trophy,
+  Trash2,
   UploadCloud,
   UserRound,
   Users,
@@ -58,7 +59,9 @@ const EVENT = {
 const DEVICE_KEY = 'paje-leticia-device-id';
 const NAME_KEY = 'paje-leticia-guest-name';
 const MAX_VIDEO_SECONDS = 8;
+const EDITED_PHOTO_SIZE = { width: 1080, height: 1920 };
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'm4v', 'webm']);
+const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif']);
 const UPLOAD_EXTENSIONS = new Set([
   'jpg',
   'jpeg',
@@ -208,6 +211,12 @@ function isVideoFile(file) {
   return type.startsWith('video/') || VIDEO_EXTENSIONS.has(getFileExtension(file));
 }
 
+function isImageFile(file) {
+  const type = String(file?.type || '');
+
+  return type.startsWith('image/') || IMAGE_EXTENSIONS.has(getFileExtension(file));
+}
+
 function getVideoDuration(file) {
   return new Promise((resolve) => {
     const video = document.createElement('video');
@@ -229,6 +238,54 @@ function getVideoDuration(file) {
     window.setTimeout(() => done(null), 4000);
     video.src = objectUrl;
   });
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Não foi possível abrir essa foto para edição.'));
+    };
+    image.src = objectUrl;
+  });
+}
+
+async function createEditedImageFile(file, adjustments) {
+  const image = await loadImageFromFile(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = EDITED_PHOTO_SIZE.width;
+  canvas.height = EDITED_PHOTO_SIZE.height;
+
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#fffdf8';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const zoom = Number(adjustments.zoom || 1);
+  const scale = Math.max(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight) * zoom;
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  const maxOffsetX = Math.max(0, (drawWidth - canvas.width) / 2);
+  const maxOffsetY = Math.max(0, (drawHeight - canvas.height) / 2);
+  const offsetX = (Number(adjustments.x || 0) / 100) * maxOffsetX;
+  const offsetY = (Number(adjustments.y || 0) / 100) * maxOffsetY;
+  const drawX = (canvas.width - drawWidth) / 2 + offsetX;
+  const drawY = (canvas.height - drawHeight) / 2 + offsetY;
+
+  context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+  if (!blob) {
+    throw new Error('Não foi possível preparar a foto.');
+  }
+
+  return new File([blob], `${Date.now()}-foto-editada.jpg`, { type: 'image/jpeg' });
 }
 
 function getModerationStatus(item) {
@@ -349,6 +406,7 @@ function MediaLightbox({
   photo,
   onClose,
   onReact,
+  onDelete,
   deviceId,
   onPrevious,
   onNext,
@@ -362,6 +420,7 @@ function MediaLightbox({
   const status = getModerationStatus(photo);
   const myVote = photo.reactionVotes?.find((vote) => vote.deviceId === deviceId);
   const canReact = status === 'approved';
+  const canDelete = Boolean(onDelete && photo.deviceId === deviceId);
 
   return (
     <div className="media-lightbox" role="dialog" aria-modal="true" aria-label="Mídia da festa">
@@ -410,6 +469,12 @@ function MediaLightbox({
         </div>
         {!canReact ? (
           <p className="lightbox-note">Essa mídia só recebe reações depois de aprovada pela auditoria.</p>
+        ) : null}
+        {canDelete ? (
+          <button className="lightbox-delete" onClick={() => onDelete(photo.id)} type="button">
+            <Trash2 size={17} />
+            Apagar envio
+          </button>
         ) : null}
       </article>
     </div>
@@ -588,8 +653,11 @@ function GuestPage() {
   const [message, setMessage] = useState('');
   const [nameModalOpen, setNameModalOpen] = useState(false);
   const [nameModalError, setNameModalError] = useState('');
+  const [uploadSourceOpen, setUploadSourceOpen] = useState(false);
+  const [photoEditor, setPhotoEditor] = useState(null);
   const fileInputRef = useRef(null);
-  const cameraInputRef = useRef(null);
+  const photoCameraInputRef = useRef(null);
+  const videoCameraInputRef = useRef(null);
 
   const approvedPhotos = useMemo(
     () => photos.filter((photo) => getModerationStatus(photo) === 'approved'),
@@ -670,6 +738,14 @@ function GuestPage() {
     loadChallenge();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (photoEditor?.url) {
+        URL.revokeObjectURL(photoEditor.url);
+      }
+    };
+  }, [photoEditor?.url]);
+
   const saveName = (event) => {
     event.preventDefault();
     const cleanName = draftName.trim();
@@ -698,7 +774,29 @@ function GuestPage() {
       return;
     }
 
-    fileInputRef.current?.click();
+    setUploadSourceOpen(true);
+  };
+
+  const closeUploadSource = () => {
+    setUploadSourceOpen(false);
+  };
+
+  const chooseUploadSource = (source) => {
+    setUploadSourceOpen(false);
+
+    window.setTimeout(() => {
+      if (source === 'photo') {
+        photoCameraInputRef.current?.click();
+        return;
+      }
+
+      if (source === 'video') {
+        videoCameraInputRef.current?.click();
+        return;
+      }
+
+      fileInputRef.current?.click();
+    }, 80);
   };
 
   const confirmNameAndUpload = (event) => {
@@ -717,7 +815,87 @@ function GuestPage() {
     setNameModalError('');
     setMessage('');
     loadChallenge(false, cleanName);
-    fileInputRef.current?.click();
+    setUploadSourceOpen(true);
+  };
+
+  const resetFileInputs = () => {
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (photoCameraInputRef.current) photoCameraInputRef.current.value = '';
+    if (videoCameraInputRef.current) videoCameraInputRef.current.value = '';
+  };
+
+  const openPhotoEditor = (file, effectiveGuestName) => {
+    setPhotoEditor((current) => {
+      if (current?.url) {
+        URL.revokeObjectURL(current.url);
+      }
+
+      return {
+        file,
+        guestName: effectiveGuestName,
+        url: URL.createObjectURL(file),
+        zoom: 1,
+        x: 0,
+        y: 0,
+      };
+    });
+    resetFileInputs();
+  };
+
+  const closePhotoEditor = () => {
+    setPhotoEditor((current) => {
+      if (current?.url) {
+        URL.revokeObjectURL(current.url);
+      }
+
+      return null;
+    });
+  };
+
+  const sendFiles = async (selectedFiles, effectiveGuestName) => {
+    setUploading(true);
+    setMessage('Enviando suas mídias...');
+
+    try {
+      for (const file of selectedFiles) {
+        const formData = new FormData();
+        formData.append('photo', file);
+        formData.append('guestName', effectiveGuestName);
+        formData.append('deviceId', deviceId);
+        if (challenge?.id) {
+          formData.append('challengeId', challenge.id);
+        }
+
+        const response = await fetch('/api/photos', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          if (response.status === 413) {
+            throw new Error('Essa mídia ficou grande demais. Tente outra foto ou um vídeo menor.');
+          }
+          throw new Error(data.error || 'Não foi possível enviar uma das mídias.');
+        }
+      }
+
+      setMessage(
+        selectedFiles.length === 1
+          ? 'Mídia recebida. Ela aparece no álbum quando for aprovada.'
+          : 'Mídias recebidas. Elas aparecem no álbum quando forem aprovadas.',
+      );
+      resetFileInputs();
+      await loadPhotos();
+      await loadChecklist();
+      if (challenge?.id) {
+        await loadChallenge(true);
+      }
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setUploading(false);
+    }
   };
 
   const uploadFiles = async (files) => {
@@ -752,56 +930,44 @@ function GuestPage() {
       const duration = await getVideoDuration(file);
       if (duration && duration > MAX_VIDEO_SECONDS + 0.25) {
         setMessage('Vídeos podem ter no máximo 8 segundos. Escolha um vídeo mais curto.');
-        if (fileInputRef.current) fileInputRef.current.value = '';
-        if (cameraInputRef.current) cameraInputRef.current.value = '';
+        resetFileInputs();
         return;
       }
     }
 
-    setUploading(true);
-    setMessage('Enviando suas mídias...');
+    if (selectedFiles.length === 1 && isImageFile(selectedFiles[0])) {
+      openPhotoEditor(selectedFiles[0], effectiveGuestName);
+      setMessage('');
+      return;
+    }
+
+    await sendFiles(selectedFiles, effectiveGuestName);
+  };
+
+  const sendEditedPhoto = async () => {
+    if (!photoEditor) {
+      return;
+    }
 
     try {
-      for (const file of selectedFiles) {
-        const formData = new FormData();
-        formData.append('photo', file);
-        formData.append('guestName', effectiveGuestName);
-        formData.append('deviceId', deviceId);
-        if (challenge?.id) {
-          formData.append('challengeId', challenge.id);
-        }
-
-        const response = await fetch('/api/photos', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          if (response.status === 413) {
-            throw new Error('Essa mídia ficou grande demais. Tente outra foto ou um vídeo menor.');
-          }
-          throw new Error(data.error || 'Não foi possível enviar uma das mídias.');
-        }
-      }
-
-      setMessage(
-        selectedFiles.length === 1
-          ? 'Mídia recebida. Ela aparece no álbum quando for aprovada.'
-          : 'Mídias recebidas. Elas aparecem no álbum quando forem aprovadas.',
-      );
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      if (cameraInputRef.current) cameraInputRef.current.value = '';
-      await loadPhotos();
-      await loadChecklist();
-      if (challenge?.id) {
-        await loadChallenge(true);
-      }
+      const editedFile = await createEditedImageFile(photoEditor.file, photoEditor);
+      const guestNameForUpload = photoEditor.guestName || guestName || draftName.trim();
+      closePhotoEditor();
+      await sendFiles([editedFile], guestNameForUpload);
     } catch (error) {
       setMessage(error.message);
-    } finally {
-      setUploading(false);
     }
+  };
+
+  const sendOriginalPhoto = async () => {
+    if (!photoEditor) {
+      return;
+    }
+
+    const file = photoEditor.file;
+    const guestNameForUpload = photoEditor.guestName || guestName || draftName.trim();
+    closePhotoEditor();
+    await sendFiles([file], guestNameForUpload);
   };
 
   const reactToMedia = async (photoId, reaction) => {
@@ -813,6 +979,25 @@ function GuestPage() {
 
       setPhotos((current) => current.map((photo) => (photo.id === data.photo.id ? data.photo : photo)));
       setActiveMedia((current) => (current?.id === data.photo.id ? data.photo : current));
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const deleteMedia = async (photoId) => {
+    if (!window.confirm('Apagar essa mídia enviada por você?')) {
+      return;
+    }
+
+    try {
+      await requestJson(`/api/photos/${photoId}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ deviceId }),
+      });
+      setPhotos((current) => current.filter((photo) => photo.id !== photoId));
+      setActiveMedia((current) => (current?.id === photoId ? null : current));
+      setMessage('Mídia apagada.');
+      await loadChecklist();
     } catch (error) {
       setMessage(error.message);
     }
@@ -839,11 +1024,19 @@ function GuestPage() {
         type="file"
       />
       <input
-        accept="image/*,video/*"
+        accept="image/*"
         capture="environment"
         className="hidden-input"
         onChange={(event) => uploadFiles(event.target.files)}
-        ref={cameraInputRef}
+        ref={photoCameraInputRef}
+        type="file"
+      />
+      <input
+        accept="video/*"
+        capture="environment"
+        className="hidden-input"
+        onChange={(event) => uploadFiles(event.target.files)}
+        ref={videoCameraInputRef}
         type="file"
       />
 
@@ -992,6 +1185,100 @@ function GuestPage() {
         Upload
       </button>
 
+      {uploadSourceOpen ? (
+        <div className="name-modal-layer upload-source-layer" role="dialog" aria-modal="true" aria-label="Escolher envio">
+          <button className="name-modal-backdrop" onClick={closeUploadSource} type="button" aria-label="Fechar" />
+          <div className="upload-source-card">
+            <div>
+              <span>Enviar mídia</span>
+              <h2>Como você quer participar?</h2>
+              <small>Fotos podem ser cortadas antes do envio. Vídeos até 8 segundos.</small>
+            </div>
+            <button onClick={() => chooseUploadSource('photo')} type="button">
+              <Camera size={20} />
+              Tirar foto
+            </button>
+            <button onClick={() => chooseUploadSource('video')} type="button">
+              <PlayCircle size={20} />
+              Gravar vídeo
+            </button>
+            <button onClick={() => chooseUploadSource('gallery')} type="button">
+              <Images size={20} />
+              Escolher da galeria
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {photoEditor ? (
+        <div className="name-modal-layer photo-editor-layer" role="dialog" aria-modal="true" aria-label="Editar foto">
+          <button className="name-modal-backdrop" onClick={closePhotoEditor} type="button" aria-label="Fechar editor" />
+          <div className="photo-editor-card">
+            <div className="photo-editor-heading">
+              <div>
+                <span>Ajustar foto</span>
+                <h2>Corte para o telão</h2>
+              </div>
+              <button className="icon-button" onClick={closePhotoEditor} type="button" aria-label="Fechar">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="photo-crop-frame">
+              <img
+                alt="Prévia do corte"
+                src={photoEditor.url}
+                style={{
+                  transform: `translate(${photoEditor.x}%, ${photoEditor.y}%) scale(${photoEditor.zoom})`,
+                }}
+              />
+            </div>
+            <div className="photo-editor-controls">
+              <label>
+                <span>Zoom</span>
+                <input
+                  max="2.4"
+                  min="1"
+                  onChange={(event) => setPhotoEditor((current) => ({ ...current, zoom: Number(event.target.value) }))}
+                  step="0.05"
+                  type="range"
+                  value={photoEditor.zoom}
+                />
+              </label>
+              <label>
+                <span>Lado</span>
+                <input
+                  max="100"
+                  min="-100"
+                  onChange={(event) => setPhotoEditor((current) => ({ ...current, x: Number(event.target.value) }))}
+                  step="1"
+                  type="range"
+                  value={photoEditor.x}
+                />
+              </label>
+              <label>
+                <span>Altura</span>
+                <input
+                  max="100"
+                  min="-100"
+                  onChange={(event) => setPhotoEditor((current) => ({ ...current, y: Number(event.target.value) }))}
+                  step="1"
+                  type="range"
+                  value={photoEditor.y}
+                />
+              </label>
+            </div>
+            <div className="photo-editor-actions">
+              <button className="secondary-action" onClick={sendOriginalPhoto} type="button">
+                Original
+              </button>
+              <button className="primary-action" onClick={sendEditedPhoto} type="button">
+                Cortar e enviar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {nameModalOpen ? (
         <div className="name-modal-layer" role="dialog" aria-modal="true" aria-label="Identificação do convidado">
           <button
@@ -1046,6 +1333,7 @@ function GuestPage() {
         hasNext={lightboxItems.length > 1}
         hasPrevious={lightboxItems.length > 1}
         onClose={() => setActiveMedia(null)}
+        onDelete={deleteMedia}
         onNext={() => moveActiveMedia(1)}
         onPrevious={() => moveActiveMedia(-1)}
         onReact={reactToMedia}

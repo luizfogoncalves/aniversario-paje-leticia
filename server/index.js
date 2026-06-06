@@ -539,6 +539,39 @@ app.post('/api/photos', upload.single('photo'), (req, res) => {
   res.status(201).json({ photo: withMediaDefaults(photo) });
 });
 
+app.delete('/api/photos/:id', (req, res) => {
+  const deviceId = String(req.body.deviceId || '').trim().slice(0, 120);
+
+  if (!deviceId) {
+    res.status(400).json({ error: 'Informe o deviceId para apagar.' });
+    return;
+  }
+
+  const photos = readPhotos();
+  const index = photos.findIndex((photo) => photo.id === req.params.id);
+
+  if (index === -1) {
+    res.status(404).json({ error: 'Mídia não encontrada.' });
+    return;
+  }
+
+  const photo = photos[index];
+
+  if (photo.deviceId !== deviceId) {
+    res.status(403).json({ error: 'Você só pode apagar mídias enviadas por este celular.' });
+    return;
+  }
+
+  photos.splice(index, 1);
+  writePhotos(photos);
+
+  if (photo.filename) {
+    fs.unlink(path.join(uploadDir, path.basename(photo.filename)), () => {});
+  }
+
+  res.json({ ok: true });
+});
+
 app.put('/api/photos/:id/moderation', (req, res) => {
   const nextStatus = String(req.body.moderationStatus || '').trim();
 
