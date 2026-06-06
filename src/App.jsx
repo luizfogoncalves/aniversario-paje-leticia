@@ -302,6 +302,21 @@ function getModerationLabel(status) {
   return labels[status] || 'Aprovada';
 }
 
+function sortByCreatedAtAsc(items = []) {
+  return [...items].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+}
+
+function mergeWallQueue(currentQueue = [], incomingPhotos = []) {
+  const incomingById = new Map(incomingPhotos.map((photo) => [photo.id, photo]));
+  const currentIds = new Set(currentQueue.map((photo) => photo.id));
+  const keptQueue = currentQueue
+    .filter((photo) => incomingById.has(photo.id))
+    .map((photo) => incomingById.get(photo.id));
+  const newPhotos = sortByCreatedAtAsc(incomingPhotos).filter((photo) => !currentIds.has(photo.id));
+
+  return [...keptQueue, ...newPhotos];
+}
+
 function formatPhotoDate(value) {
   return new Date(value).toLocaleString('pt-BR', {
     day: '2-digit',
@@ -1345,15 +1360,17 @@ function GuestPage() {
 
 function WallPage() {
   const [photos, setPhotos] = useState([]);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activePhotoId, setActivePhotoId] = useState('');
+  const photosRef = useRef([]);
   const guestUrl = `${window.location.origin}/guest`;
 
   useEffect(() => {
     const load = async () => {
       try {
-        setPhotos(await fetchPhotos());
+        const nextPhotos = await fetchPhotos();
+        setPhotos((current) => mergeWallQueue(current, nextPhotos));
       } catch {
-        setPhotos([]);
+        setPhotos((current) => current);
       }
     };
 
@@ -1362,23 +1379,44 @@ function WallPage() {
     return () => window.clearInterval(timer);
   }, []);
 
+  const queueSignature = photos.map((photo) => photo.id).join('|');
+
+  useEffect(() => {
+    photosRef.current = photos;
+  }, [photos]);
+
+  useEffect(() => {
+    setActivePhotoId((current) => {
+      if (!photos.length) {
+        return '';
+      }
+
+      if (current && photos.some((photo) => photo.id === current)) {
+        return current;
+      }
+
+      return photos[0].id;
+    });
+  }, [queueSignature]);
+
   useEffect(() => {
     if (!photos.length) {
       return undefined;
     }
 
     const timer = window.setInterval(() => {
-      setActiveIndex((current) => (current + 1) % photos.length);
+      setActivePhotoId((current) => {
+        const queuedPhotos = photosRef.current;
+        const currentIndex = queuedPhotos.findIndex((photo) => photo.id === current);
+        const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+        return queuedPhotos[(safeIndex + 1) % queuedPhotos.length]?.id || '';
+      });
     }, MAX_VIDEO_SECONDS * 1000);
 
     return () => window.clearInterval(timer);
-  }, [photos.length]);
+  }, [queueSignature]);
 
-  useEffect(() => {
-    setActiveIndex((current) => Math.min(current, Math.max(photos.length - 1, 0)));
-  }, [photos.length]);
-
-  const activePhoto = photos[activeIndex];
+  const activePhoto = photos.find((photo) => photo.id === activePhotoId) || photos[0];
   const recentPhotos = photos.slice(0, 8);
   const guestCount = new Set(photos.map((photo) => photo.deviceId)).size;
 
