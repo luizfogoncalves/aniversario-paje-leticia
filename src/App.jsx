@@ -394,7 +394,7 @@ function QrPage({ navigate }) {
     fetch('/api/network')
       .then((response) => response.json())
       .then((data) => {
-        const recommended = data.urls?.[0]?.guestUrl || data.fallback?.guestUrl || `${window.location.origin}/guest`;
+        const recommended = data.fallback?.guestUrl || data.urls?.[0]?.guestUrl || `${window.location.origin}/guest`;
         setNetwork(data);
         setManualUrl(recommended);
       })
@@ -405,7 +405,7 @@ function QrPage({ navigate }) {
 
   const qrUrl = manualUrl || `${window.location.origin}/guest`;
   const wallUrl =
-    network?.urls?.[0]?.wallUrl || network?.fallback?.wallUrl || `${window.location.origin}/wall`;
+    network?.fallback?.wallUrl || network?.urls?.[0]?.wallUrl || `${window.location.origin}/wall`;
 
   const copyQrUrl = async () => {
     await navigator.clipboard?.writeText(qrUrl);
