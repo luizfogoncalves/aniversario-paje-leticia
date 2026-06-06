@@ -57,6 +57,19 @@ const EVENT = {
 
 const DEVICE_KEY = 'paje-leticia-device-id';
 const NAME_KEY = 'paje-leticia-guest-name';
+const UPLOAD_EXTENSIONS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'heic',
+  'heif',
+  'mp4',
+  'mov',
+  'm4v',
+  'webm',
+]);
 const REACTION_OPTIONS = [
   { id: 'amei', label: 'Amei', symbol: '💛' },
   { id: 'gol', label: 'Gol', symbol: '⚽' },
@@ -170,6 +183,16 @@ function getMediaType(item) {
   }
 
   return 'image';
+}
+
+function getFileExtension(file) {
+  return String(file?.name || '').split('.').pop()?.toLowerCase() || '';
+}
+
+function isUploadableMedia(file) {
+  const type = String(file?.type || '');
+
+  return type.startsWith('image/') || type.startsWith('video/') || UPLOAD_EXTENSIONS.has(getFileExtension(file));
 }
 
 function getModerationStatus(item) {
@@ -607,12 +630,10 @@ function GuestPage() {
       return;
     }
 
-    const selectedFiles = Array.from(files || []).filter(
-      (file) => file.type.startsWith('image/') || file.type.startsWith('video/'),
-    );
+    const selectedFiles = Array.from(files || []).filter(isUploadableMedia);
 
     if (!selectedFiles.length) {
-      setMessage('Escolha pelo menos uma foto ou vídeo.');
+      setMessage('Escolha uma foto ou vídeo da galeria.');
       return;
     }
 
@@ -636,6 +657,9 @@ function GuestPage() {
 
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
+          if (response.status === 413) {
+            throw new Error('Essa mídia ficou grande demais. Tente outra foto ou um vídeo menor.');
+          }
           throw new Error(data.error || 'Não foi possível enviar uma das mídias.');
         }
       }

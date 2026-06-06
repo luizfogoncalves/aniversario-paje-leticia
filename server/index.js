@@ -631,6 +631,29 @@ app.get('/api/qr', async (req, res) => {
   }
 });
 
+app.use((error, _req, res, next) => {
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
+
+  if (error instanceof multer.MulterError) {
+    const message =
+      error.code === 'LIMIT_FILE_SIZE'
+        ? 'Essa mídia ficou grande demais. Tente outra foto ou um vídeo menor.'
+        : 'Não foi possível receber a mídia. Tente novamente.';
+    res.status(400).json({ error: message });
+    return;
+  }
+
+  if (error?.message === 'Envie apenas fotos ou vídeos.') {
+    res.status(400).json({ error: error.message });
+    return;
+  }
+
+  next(error);
+});
+
 const distDir = path.join(rootDir, 'dist');
 
 if (fs.existsSync(distDir)) {
