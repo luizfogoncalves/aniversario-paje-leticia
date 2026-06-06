@@ -625,9 +625,17 @@ function GuestPage() {
   };
 
   const uploadFiles = async (files) => {
-    if (!guestName) {
+    const effectiveGuestName = guestName || draftName.trim();
+
+    if (!effectiveGuestName) {
       setMessage('Salve seu nome antes de enviar fotos ou vídeos.');
       return;
+    }
+
+    if (!guestName) {
+      localStorage.setItem(NAME_KEY, effectiveGuestName);
+      setGuestName(effectiveGuestName);
+      setDraftName(effectiveGuestName);
     }
 
     const selectedFiles = Array.from(files || []).filter(isUploadableMedia);
@@ -644,7 +652,7 @@ function GuestPage() {
       for (const file of selectedFiles) {
         const formData = new FormData();
         formData.append('photo', file);
-        formData.append('guestName', guestName);
+        formData.append('guestName', effectiveGuestName);
         formData.append('deviceId', deviceId);
         if (challenge?.id) {
           formData.append('challengeId', challenge.id);
