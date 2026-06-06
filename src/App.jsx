@@ -59,6 +59,7 @@ const EVENT = {
 const DEVICE_KEY = 'paje-leticia-device-id';
 const NAME_KEY = 'paje-leticia-guest-name';
 const MAX_VIDEO_SECONDS = 8;
+const PHOTO_DISPLAY_SECONDS = 5;
 const EDITED_PHOTO_SIZE = { width: 1080, height: 1920 };
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'm4v', 'webm']);
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif']);
@@ -1399,22 +1400,32 @@ function WallPage() {
     });
   }, [queueSignature]);
 
+  const hasMultiplePhotos = photos.length > 1;
+
   useEffect(() => {
-    if (!photos.length) {
+    const queuedPhotos = photosRef.current;
+    const activePhoto = queuedPhotos.find((photo) => photo.id === activePhotoId);
+
+    if (!activePhoto || !hasMultiplePhotos) {
       return undefined;
     }
 
-    const timer = window.setInterval(() => {
-      setActivePhotoId((current) => {
-        const queuedPhotos = photosRef.current;
-        const currentIndex = queuedPhotos.findIndex((photo) => photo.id === current);
-        const safeIndex = currentIndex >= 0 ? currentIndex : 0;
-        return queuedPhotos[(safeIndex + 1) % queuedPhotos.length]?.id || '';
-      });
-    }, MAX_VIDEO_SECONDS * 1000);
+    const delay =
+      getMediaType(activePhoto) === 'video'
+        ? MAX_VIDEO_SECONDS * 1000
+        : PHOTO_DISPLAY_SECONDS * 1000;
 
-    return () => window.clearInterval(timer);
-  }, [queueSignature]);
+    const timer = window.setTimeout(() => {
+      setActivePhotoId((current) => {
+        const latestQueue = photosRef.current;
+        const currentIndex = latestQueue.findIndex((photo) => photo.id === current);
+        const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+        return latestQueue[(safeIndex + 1) % latestQueue.length]?.id || '';
+      });
+    }, delay);
+
+    return () => window.clearTimeout(timer);
+  }, [activePhotoId, hasMultiplePhotos]);
 
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) || photos[0];
   const recentPhotos = photos.slice(0, 8);
