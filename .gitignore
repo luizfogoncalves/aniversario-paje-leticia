@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+.vscode/
+uploads/*
+!uploads/.gitkeep
+data/photos.json
+data/challenge-assignments.json
+npm-debug.log*
