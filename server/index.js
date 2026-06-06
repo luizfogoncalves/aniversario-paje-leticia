@@ -334,6 +334,8 @@ function getNetworkUrls() {
   const interfaces = os.networkInterfaces();
   const addresses = [];
 
+  const publicPort = clientPort === 80 ? '' : `:${clientPort}`;
+
   Object.entries(interfaces).forEach(([name, values]) => {
     values
       ?.filter((item) => item.family === 'IPv4' && !item.internal)
@@ -341,8 +343,8 @@ function getNetworkUrls() {
         addresses.push({
           label: name,
           host: item.address,
-          guestUrl: `http://${item.address}:${clientPort}/guest`,
-          wallUrl: `http://${item.address}:${clientPort}/wall`,
+          guestUrl: `http://${item.address}${publicPort}/guest`,
+          wallUrl: `http://${item.address}${publicPort}/wall`,
         });
       });
   });
@@ -356,13 +358,14 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/network', (req, res) => {
   const host = req.hostname === 'localhost' ? 'localhost' : req.hostname;
+  const publicPort = clientPort === 80 ? '' : `:${clientPort}`;
   res.json({
     clientPort,
     apiPort,
     urls: getNetworkUrls(),
     fallback: {
-      guestUrl: `http://${host}:${clientPort}/guest`,
-      wallUrl: `http://${host}:${clientPort}/wall`,
+      guestUrl: `http://${host}${publicPort}/guest`,
+      wallUrl: `http://${host}${publicPort}/wall`,
     },
   });
 });

@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aniversario-paje-leticia
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aniversario-paje-leticia
+  namespace: aniversario-paje-leticia
+spec:
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: 5173
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: aniversario-paje-leticia
+  namespace: aniversario-paje-leticia
+subsets:
+  - addresses:
+      - ip: 10.0.0.107
+    ports:
+      - name: http
+        port: 5173
+        protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aniversario-paje-leticia
+  namespace: aniversario-paje-leticia
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "150m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: aniversario-paje-leticia
+                port:
+                  number: 80
