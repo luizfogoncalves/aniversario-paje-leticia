@@ -332,6 +332,17 @@ function MediaPreview({ item, className = '', controls = false, autoPlay = false
   const mediaRef = useRef(null);
 
   useEffect(() => {
+    if (!autoPlay || getMediaType(item) !== 'video' || !mediaRef.current) {
+      return;
+    }
+
+    const video = mediaRef.current;
+    video.muted = true;
+    video.playsInline = true;
+    video.play().catch(() => {});
+  }, [autoPlay, item?.id, item?.url]);
+
+  useEffect(() => {
     if (!maxPlaybackSeconds || getMediaType(item) !== 'video' || !mediaRef.current) {
       return;
     }
@@ -362,6 +373,7 @@ function MediaPreview({ item, className = '', controls = false, autoPlay = false
         controls={controls}
         loop={autoPlay && !maxPlaybackSeconds}
         muted
+        onCanPlay={autoPlay ? () => mediaRef.current?.play().catch(() => {}) : undefined}
         onTimeUpdate={maxPlaybackSeconds ? limitPlayback : undefined}
         playsInline
         ref={mediaRef}
@@ -457,7 +469,7 @@ function MediaLightbox({
           </button>
         </div>
         <div className="lightbox-media" style={{ '--media-bg': `url(${photo.url})` }}>
-          <MediaPreview item={photo} controls={getMediaType(photo) === 'video'} autoPlay={getMediaType(photo) === 'video'} />
+          <MediaPreview item={photo} autoPlay={getMediaType(photo) === 'video'} />
         </div>
         {hasPrevious ? (
           <button className="story-tap-zone previous" onClick={onPrevious} type="button" aria-label="Mídia anterior">

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,6 +18,7 @@ const challengesFile = path.join(dataDir, 'challenges.json');
 const assignmentsFile = path.join(dataDir, 'challenge-assignments.json');
 const apiPort = Number(process.env.API_PORT || 4174);
 const clientPort = Number(process.env.CLIENT_PORT || 6173);
+const maxVideoSeconds = 8;
 const videoExtensions = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 
 fs.mkdirSync(uploadDir, { recursive: true });
@@ -133,6 +135,130 @@ function getMediaType(input = {}) {
   }
 
   return 'image';
+}
+
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('ffmpeg', args);
+    let stderr = '';
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr || `ffmpeg saiu com código ${code}`));
+    });
+  });
+}
+
+async function normalizeUploadedMedia(file) {
+  if (getMediaType(file) !== 'video') {
+    return { ...file, mediaType: 'image' };
+  }
+
+  const inputPath = path.join(uploadDir, file.filename);
+  const outputFilename = `${Date.now()}-${crypto.randomUUID()}.mp4`;
+  const outputPath = path.join(uploadDir, outputFilename);
+
+  try {
+    await runFfmpeg([
+      '-y',
+      '-i',
+      inputPath,
+      '-t',
+      String(maxVideoSeconds),
+      '-map',
+      '0:v:0',
+      '-map',
+      '0:a?',
+      '-vf',
+      'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'veryfast',
+      '-crf',
+      '24',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      '-movflags',
+      '+faststart',
+      '-shortest',
+      outputPath,
+    ]);
+
+    fs.unlink(inputPath, () => {});
+
+    return {
+      ...file,
+      filename: outputFilename,
+      mimetype: 'video/mp4',
+      size: fs.statSync(outputPath).size,
+      mediaType: 'video',
+    };
+  } catch (error) {
+    fs.unlink(outputPath, () => {});
+    fs.unlink(inputPath, () => {});
+    throw new Error('Não foi possível preparar esse vídeo. Tente gravar novamente em até 8 segundos.');
+  }
+}
+
+async function normalizeExistingVideos() {
+  const photos = readPhotos();
+  let changed = false;
+
+  for (let index = 0; index < photos.length; index += 1) {
+    const photo = photos[index];
+
+    if (getMediaType(photo) !== 'video' || photo.videoCodecNormalized) {
+      continue;
+    }
+
+    const filename = path.basename(photo.filename || photo.url || '');
+    const filePath = path.join(uploadDir, filename);
+
+    if (!filename || !fs.existsSync(filePath)) {
+      continue;
+    }
+
+    try {
+      const normalized = await normalizeUploadedMedia({
+        filename,
+        originalname: photo.originalName || filename,
+        mimetype: photo.mimetype || '',
+        size: photo.size || 0,
+      });
+
+      photos[index] = {
+        ...photo,
+        filename: normalized.filename,
+        url: `/uploads/${normalized.filename}`,
+        mimetype: normalized.mimetype,
+        size: normalized.size,
+        mediaType: 'video',
+        videoCodecNormalized: true,
+      };
+      changed = true;
+      writePhotos(photos);
+    } catch (error) {
+      console.error(`Falha ao normalizar vídeo ${photo.id}: ${error.message}`);
+    }
+  }
+
+  if (changed) {
+    writePhotos(photos);
+  }
 }
 
 function getModerationStatus(photo = {}) {
@@ -497,9 +623,17 @@ app.get('/api/challenges/progress', (req, res) => {
   });
 });
 
-app.post('/api/photos', upload.single('photo'), (req, res) => {
+app.post('/api/photos', upload.single('photo'), async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: 'Nenhuma mídia foi enviada.' });
+    return;
+  }
+
+  let uploadedFile;
+  try {
+    uploadedFile = await normalizeUploadedMedia(req.file);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
     return;
   }
 
@@ -510,7 +644,7 @@ app.post('/api/photos', upload.single('photo'), (req, res) => {
     id: crypto.randomUUID(),
     guestName: normalizeName(req.body.guestName),
     deviceId: String(req.body.deviceId || crypto.randomUUID()).slice(0, 120),
-    mediaType: getMediaType(req.file),
+    mediaType: uploadedFile.mediaType,
     reactions: normalizeReactions(req.body.reactions),
     reactionVotes: [],
     moderationStatus: 'pending',
@@ -525,11 +659,12 @@ app.post('/api/photos', upload.single('photo'), (req, res) => {
           category: challenge.category,
         }
       : null,
-    originalName: req.file.originalname,
-    filename: req.file.filename,
-    url: `/uploads/${req.file.filename}`,
-    mimetype: req.file.mimetype,
-    size: req.file.size,
+    originalName: uploadedFile.originalname,
+    filename: uploadedFile.filename,
+    url: `/uploads/${uploadedFile.filename}`,
+    mimetype: uploadedFile.mimetype,
+    size: uploadedFile.size,
+    videoCodecNormalized: uploadedFile.mediaType === 'video',
     createdAt: new Date().toISOString(),
   };
 
@@ -709,4 +844,7 @@ if (fs.existsSync(distDir)) {
 
 app.listen(apiPort, '0.0.0.0', () => {
   console.log(`Upload API running at http://localhost:${apiPort}`);
+  normalizeExistingVideos().catch((error) => {
+    console.error(`Falha ao normalizar vídeos existentes: ${error.message}`);
+  });
 });
