@@ -17,6 +17,7 @@ const challengesFile = path.join(dataDir, 'challenges.json');
 const assignmentsFile = path.join(dataDir, 'challenge-assignments.json');
 const apiPort = Number(process.env.API_PORT || 4174);
 const clientPort = Number(process.env.CLIENT_PORT || 6173);
+const videoExtensions = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 
 fs.mkdirSync(uploadDir, { recursive: true });
 fs.mkdirSync(dataDir, { recursive: true });
@@ -116,8 +117,18 @@ function normalizeName(name) {
   return String(name || '').trim().slice(0, 80) || 'Convidado';
 }
 
-function getMediaType(mimetype = '') {
-  if (mimetype.startsWith('video/')) {
+function getMediaType(input = {}) {
+  const mimetype = typeof input === 'string' ? input : input.mimetype || '';
+  const filenames =
+    typeof input === 'string'
+      ? []
+      : [input.originalName, input.originalname, input.filename, input.url].filter(Boolean);
+
+  const hasVideoExtension = filenames.some((filename) =>
+    videoExtensions.has(path.extname(filename).toLowerCase()),
+  );
+
+  if (mimetype.startsWith('video/') || hasVideoExtension) {
     return 'video';
   }
 
@@ -222,7 +233,7 @@ function withMediaDefaults(photo) {
 
   return {
     ...photo,
-    mediaType: getMediaType(photo.mimetype || ''),
+    mediaType: getMediaType(photo),
     moderationStatus: getModerationStatus(photo),
     reactions: aggregatedReactions.length ? aggregatedReactions : legacyReactions,
     reactionVotes,
@@ -499,7 +510,7 @@ app.post('/api/photos', upload.single('photo'), (req, res) => {
     id: crypto.randomUUID(),
     guestName: normalizeName(req.body.guestName),
     deviceId: String(req.body.deviceId || crypto.randomUUID()).slice(0, 120),
-    mediaType: getMediaType(req.file.mimetype),
+    mediaType: getMediaType(req.file),
     reactions: normalizeReactions(req.body.reactions),
     reactionVotes: [],
     moderationStatus: 'pending',

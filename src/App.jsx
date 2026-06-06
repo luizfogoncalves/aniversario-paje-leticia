@@ -57,6 +57,8 @@ const EVENT = {
 
 const DEVICE_KEY = 'paje-leticia-device-id';
 const NAME_KEY = 'paje-leticia-guest-name';
+const MAX_VIDEO_SECONDS = 8;
+const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'm4v', 'webm']);
 const UPLOAD_EXTENSIONS = new Set([
   'jpg',
   'jpeg',
@@ -178,7 +180,11 @@ function getStatusIcon(status) {
 }
 
 function getMediaType(item) {
-  if (item?.mediaType === 'video' || item?.mimetype?.startsWith('video/')) {
+  if (
+    item?.mediaType === 'video' ||
+    item?.mimetype?.startsWith('video/') ||
+    VIDEO_EXTENSIONS.has(getFileExtension(item?.url || item?.filename || item?.originalName))
+  ) {
     return 'video';
   }
 
@@ -186,13 +192,43 @@ function getMediaType(item) {
 }
 
 function getFileExtension(file) {
-  return String(file?.name || '').split('.').pop()?.toLowerCase() || '';
+  const value = typeof file === 'string' ? file : file?.name || '';
+  return String(value).split(/[?#]/)[0].split('.').pop()?.toLowerCase() || '';
 }
 
 function isUploadableMedia(file) {
   const type = String(file?.type || '');
 
   return type.startsWith('image/') || type.startsWith('video/') || UPLOAD_EXTENSIONS.has(getFileExtension(file));
+}
+
+function isVideoFile(file) {
+  const type = String(file?.type || '');
+
+  return type.startsWith('video/') || VIDEO_EXTENSIONS.has(getFileExtension(file));
+}
+
+function getVideoDuration(file) {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    const objectUrl = URL.createObjectURL(file);
+    let settled = false;
+
+    const done = (duration) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(objectUrl);
+      resolve(Number.isFinite(duration) ? duration : null);
+    };
+
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.onloadedmetadata = () => done(video.duration);
+    video.onerror = () => done(null);
+    window.setTimeout(() => done(null), 4000);
+    video.src = objectUrl;
+  });
 }
 
 function getModerationStatus(item) {
@@ -218,20 +254,43 @@ function formatPhotoDate(value) {
   });
 }
 
-function MediaPreview({ item, className = '', controls = false, autoPlay = false }) {
+function MediaPreview({ item, className = '', controls = false, autoPlay = false, maxPlaybackSeconds = 0 }) {
+  const mediaRef = useRef(null);
+
+  useEffect(() => {
+    if (!maxPlaybackSeconds || getMediaType(item) !== 'video' || !mediaRef.current) {
+      return;
+    }
+
+    mediaRef.current.currentTime = 0;
+  }, [item?.id, item?.url, maxPlaybackSeconds]);
+
   if (!item?.url) {
     return null;
   }
 
   if (getMediaType(item) === 'video') {
+    const limitPlayback = (event) => {
+      if (!maxPlaybackSeconds || event.currentTarget.currentTime < maxPlaybackSeconds) {
+        return;
+      }
+
+      event.currentTarget.currentTime = 0;
+      if (autoPlay) {
+        event.currentTarget.play().catch(() => {});
+      }
+    };
+
     return (
       <video
         autoPlay={autoPlay}
         className={className}
         controls={controls}
-        loop={autoPlay}
+        loop={autoPlay && !maxPlaybackSeconds}
         muted
+        onTimeUpdate={maxPlaybackSeconds ? limitPlayback : undefined}
         playsInline
+        ref={mediaRef}
         src={item.url}
       />
     );
@@ -684,6 +743,21 @@ function GuestPage() {
       return;
     }
 
+    setMessage('Conferindo as mídias...');
+    for (const file of selectedFiles) {
+      if (!isVideoFile(file)) {
+        continue;
+      }
+
+      const duration = await getVideoDuration(file);
+      if (duration && duration > MAX_VIDEO_SECONDS + 0.25) {
+        setMessage('Vídeos podem ter no máximo 8 segundos. Escolha um vídeo mais curto.');
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        if (cameraInputRef.current) cameraInputRef.current.value = '';
+        return;
+      }
+    }
+
     setUploading(true);
     setMessage('Enviando suas mídias...');
 
@@ -906,7 +980,7 @@ function GuestPage() {
         </section>
       ) : null}
 
-      {message ? <p className="guest-status-note">{message}</p> : null}
+      <p className="guest-status-note">{message || 'Vídeos de até 8 segundos.'}</p>
 
       <button
         className="upload-fab"
@@ -933,6 +1007,7 @@ function GuestPage() {
             <div>
               <span>Antes do upload</span>
               <h2>Qual nome vai aparecer?</h2>
+              <small>Vídeos de até 8 segundos.</small>
             </div>
             <label>
               <UserRound size={19} />
@@ -1006,7 +1081,7 @@ function WallPage() {
 
     const timer = window.setInterval(() => {
       setActiveIndex((current) => (current + 1) % photos.length);
-    }, 6500);
+    }, MAX_VIDEO_SECONDS * 1000);
 
     return () => window.clearInterval(timer);
   }, [photos.length]);
@@ -1029,6 +1104,7 @@ function WallPage() {
               className="wall-photo-bg"
               key={`${activePhoto.id}-bg`}
               item={activePhoto}
+              maxPlaybackSeconds={MAX_VIDEO_SECONDS}
             />
             <div className="wall-photo-frame">
               <MediaPreview
@@ -1036,6 +1112,7 @@ function WallPage() {
                 className="wall-photo"
                 key={activePhoto.id}
                 item={activePhoto}
+                maxPlaybackSeconds={MAX_VIDEO_SECONDS}
               />
             </div>
           </>
