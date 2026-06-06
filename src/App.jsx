@@ -312,13 +312,6 @@ function MediaLightbox({
           </button>
         ) : null}
         {status !== 'approved' ? <MediaStatusPill status={status} /> : null}
-        {photo.challenge?.title ? (
-          <p className="lightbox-challenge">
-            <ListChecks size={16} />
-            {photo.challenge.title}
-          </p>
-        ) : null}
-        {photo.reactions?.length ? <ReactionBadges reactions={photo.reactions} /> : null}
         <div className="reaction-bar" aria-label="Reagir à mídia">
           {REACTION_OPTIONS.map((reaction) => (
             <button

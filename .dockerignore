@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.DS_Store
+npm-debug.log*
+uploads/*
+!uploads/.gitkeep
+data/photos.json
+data/challenge-assignments.json

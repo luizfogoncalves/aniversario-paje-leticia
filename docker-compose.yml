@@ -1,0 +1,14 @@
+services:
+  aniversario-paje-leticia:
+    build: .
+    container_name: aniversario-paje-leticia
+    restart: unless-stopped
+    environment:
+      API_PORT: "5173"
+      CLIENT_PORT: "5173"
+      NODE_ENV: production
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
