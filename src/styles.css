@@ -985,7 +985,7 @@ p {
   padding-top: 0;
 }
 
-.guest-home > *:not(.event-memory-card):not(.hidden-input):not(.media-lightbox):not(.upload-fab):not(.floating-wall) {
+.guest-home > *:not(.event-memory-card):not(.hidden-input):not(.media-lightbox):not(.upload-fab):not(.floating-wall):not(.name-modal-layer) {
   margin-left: 18px;
   margin-right: 18px;
 }
@@ -1294,6 +1294,85 @@ p {
   position: fixed;
   transform: translateX(-50%);
   z-index: 12;
+}
+
+.name-modal-layer {
+  align-items: center;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 22px;
+  position: fixed;
+  z-index: 45;
+}
+
+.name-modal-backdrop {
+  background: rgba(7, 22, 14, 0.66);
+  border: 0;
+  inset: 0;
+  position: absolute;
+  backdrop-filter: blur(10px);
+}
+
+.name-modal-card {
+  background: #fffdf8;
+  border: 1px solid rgba(16, 35, 26, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 28px 80px rgba(6, 20, 13, 0.34);
+  display: grid;
+  gap: 16px;
+  max-width: 360px;
+  padding: 22px;
+  position: relative;
+  width: min(100%, 360px);
+  z-index: 1;
+}
+
+.name-modal-card span {
+  color: var(--gold-dark);
+  font-size: 0.76rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.name-modal-card h2 {
+  font-size: 1.55rem;
+  letter-spacing: 0;
+  margin-bottom: 0;
+}
+
+.name-modal-card label {
+  align-items: center;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  padding: 10px 12px;
+}
+
+.name-modal-card input {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  font-size: 1rem;
+  min-height: 38px;
+  outline: none;
+  width: 100%;
+}
+
+.name-modal-card p {
+  color: #a6371c;
+  font-size: 0.82rem;
+  font-weight: 800;
+  margin: -4px 0 0;
+}
+
+.name-modal-actions {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
 }
 
 .guest-home .floating-wall {
@@ -2725,7 +2804,7 @@ p {
   width: min(430px, 100vw);
 }
 
-.guest-home > *:not(.event-memory-card):not(.hidden-input):not(.media-lightbox):not(.upload-fab):not(.floating-wall) {
+.guest-home > *:not(.event-memory-card):not(.hidden-input):not(.media-lightbox):not(.upload-fab):not(.floating-wall):not(.name-modal-layer) {
   margin-left: 18px;
   margin-right: 18px;
 }

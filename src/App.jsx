@@ -527,6 +527,8 @@ function GuestPage() {
   const [challengeMessage, setChallengeMessage] = useState('');
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
+  const [nameModalOpen, setNameModalOpen] = useState(false);
+  const [nameModalError, setNameModalError] = useState('');
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
 
@@ -567,7 +569,7 @@ function GuestPage() {
     }
   };
 
-  const loadChallenge = async (forceNew = false) => {
+  const loadChallenge = async (forceNew = false, nameOverride = '') => {
     setChallengeMessage(forceNew ? 'Sorteando outro desafio...' : 'Buscando seu desafio...');
 
     try {
@@ -575,7 +577,7 @@ function GuestPage() {
         method: 'POST',
         body: JSON.stringify({
           deviceId,
-          guestName: guestName || draftName,
+          guestName: nameOverride || guestName || draftName,
           forceNew,
         }),
       });
@@ -620,15 +622,52 @@ function GuestPage() {
 
     localStorage.setItem(NAME_KEY, cleanName);
     setGuestName(cleanName);
+    setDraftName(cleanName);
     setMessage('Nome salvo para os próximos envios.');
-    loadChallenge();
+    loadChallenge(false, cleanName);
+  };
+
+  const openUploadPicker = () => {
+    if (uploading) {
+      return;
+    }
+
+    if (!guestName) {
+      setNameModalOpen(true);
+      setNameModalError('');
+      setMessage('');
+      return;
+    }
+
+    fileInputRef.current?.click();
+  };
+
+  const confirmNameAndUpload = (event) => {
+    event.preventDefault();
+    const cleanName = draftName.trim();
+
+    if (!cleanName) {
+      setNameModalError('Digite seu nome para continuar.');
+      return;
+    }
+
+    localStorage.setItem(NAME_KEY, cleanName);
+    setGuestName(cleanName);
+    setDraftName(cleanName);
+    setNameModalOpen(false);
+    setNameModalError('');
+    setMessage('');
+    loadChallenge(false, cleanName);
+    fileInputRef.current?.click();
   };
 
   const uploadFiles = async (files) => {
     const effectiveGuestName = guestName || draftName.trim();
 
     if (!effectiveGuestName) {
-      setMessage('Salve seu nome antes de enviar fotos ou vídeos.');
+      setNameModalOpen(true);
+      setNameModalError('');
+      setMessage('');
       return;
     }
 
@@ -846,7 +885,7 @@ function GuestPage() {
             ))}
           </div>
         ) : (
-          <button className="empty-gallery social-empty" onClick={() => fileInputRef.current?.click()} type="button">
+          <button className="empty-gallery social-empty" onClick={openUploadPicker} type="button">
             <ImageUp size={30} />
             <span>{guestFilter === 'pending' ? 'Nenhuma mídia sua em revisão' : 'Seja a primeira pessoa a postar'}</span>
           </button>
@@ -872,12 +911,60 @@ function GuestPage() {
       <button
         className="upload-fab"
         disabled={uploading}
-        onClick={() => fileInputRef.current?.click()}
+        onClick={openUploadPicker}
         type="button"
       >
         {uploading ? <RefreshCw className="spin" size={18} /> : <UploadCloud size={18} />}
         Upload
       </button>
+
+      {nameModalOpen ? (
+        <div className="name-modal-layer" role="dialog" aria-modal="true" aria-label="Identificação do convidado">
+          <button
+            className="name-modal-backdrop"
+            onClick={() => {
+              setNameModalOpen(false);
+              setNameModalError('');
+            }}
+            type="button"
+            aria-label="Fechar"
+          />
+          <form className="name-modal-card" onSubmit={confirmNameAndUpload}>
+            <div>
+              <span>Antes do upload</span>
+              <h2>Qual nome vai aparecer?</h2>
+            </div>
+            <label>
+              <UserRound size={19} />
+              <input
+                autoFocus
+                onChange={(event) => {
+                  setDraftName(event.target.value);
+                  setNameModalError('');
+                }}
+                placeholder="Seu nome"
+                value={draftName}
+              />
+            </label>
+            {nameModalError ? <p>{nameModalError}</p> : null}
+            <div className="name-modal-actions">
+              <button
+                className="secondary-action"
+                onClick={() => {
+                  setNameModalOpen(false);
+                  setNameModalError('');
+                }}
+                type="button"
+              >
+                Agora não
+              </button>
+              <button className="primary-action" type="submit">
+                Continuar
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       <MediaLightbox
         deviceId={deviceId}
