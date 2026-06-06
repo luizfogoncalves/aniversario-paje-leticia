@@ -2491,6 +2491,25 @@ p {
   text-transform: uppercase;
 }
 
+.wall-fullscreen-button {
+  align-items: center;
+  background: rgba(255, 253, 242, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: white;
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 900;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 14px;
+  position: absolute;
+  right: 32px;
+  top: 118px;
+  z-index: 5;
+  backdrop-filter: blur(14px);
+}
+
 .wall-caption {
   align-items: center;
   display: grid;

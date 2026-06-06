@@ -12,6 +12,7 @@ import {
   ImageUp,
   Images,
   ListChecks,
+  Maximize2,
   MessageCircle,
   MonitorPlay,
   PauseCircle,
@@ -1362,8 +1363,20 @@ function GuestPage() {
 function WallPage() {
   const [photos, setPhotos] = useState([]);
   const [activePhotoId, setActivePhotoId] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement || document.webkitFullscreenElement));
   const photosRef = useRef([]);
   const guestUrl = `${window.location.origin}/guest`;
+
+  useEffect(() => {
+    const updateFullscreenState = () =>
+      setIsFullscreen(Boolean(document.fullscreenElement || document.webkitFullscreenElement));
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenState);
+    return () => {
+      document.removeEventListener('fullscreenchange', updateFullscreenState);
+      document.removeEventListener('webkitfullscreenchange', updateFullscreenState);
+    };
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -1430,6 +1443,14 @@ function WallPage() {
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) || photos[0];
   const recentPhotos = photos.slice(0, 8);
   const guestCount = new Set(photos.map((photo) => photo.deviceId)).size;
+  const enterFullscreen = () => {
+    const target = document.documentElement;
+    const requestFullscreen = target.requestFullscreen || target.webkitRequestFullscreen;
+
+    if (requestFullscreen) {
+      requestFullscreen.call(target).catch?.(() => {});
+    }
+  };
 
   return (
     <section className="wall-screen">
@@ -1476,6 +1497,13 @@ function WallPage() {
           <span>{guestCount === 1 ? 'pessoa' : 'pessoas'}</span>
         </div>
       </div>
+
+      {!isFullscreen ? (
+        <button className="wall-fullscreen-button" onClick={enterFullscreen} type="button">
+          <Maximize2 size={19} />
+          Maximizar
+        </button>
+      ) : null}
 
       <aside className="wall-live-panel" aria-label="Resumo ao vivo">
         <span>Ao vivo</span>
