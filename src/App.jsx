@@ -454,7 +454,7 @@ function MediaLightbox({
             <X size={22} />
           </button>
         </div>
-        <div className="lightbox-media">
+        <div className="lightbox-media" style={{ '--media-bg': `url(${photo.url})` }}>
           <MediaPreview item={photo} controls={getMediaType(photo) === 'video'} autoPlay={getMediaType(photo) === 'video'} />
         </div>
         {hasPrevious ? (
