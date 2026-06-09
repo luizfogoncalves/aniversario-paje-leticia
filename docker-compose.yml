@@ -3,6 +3,8 @@ services:
     build: .
     container_name: aniversario-paje-leticia
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       API_PORT: "5173"
       CLIENT_PORT: "80"

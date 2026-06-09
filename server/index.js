@@ -4,6 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  DeleteObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import express from 'express';
 import multer from 'multer';
 import QRCode from 'qrcode';
@@ -19,7 +26,16 @@ const assignmentsFile = path.join(dataDir, 'challenge-assignments.json');
 const apiPort = Number(process.env.API_PORT || 4174);
 const clientPort = Number(process.env.CLIENT_PORT || 6173);
 const maxVideoSeconds = 8;
+const uploadLimitBytes = 120 * 1024 * 1024;
+const s3Bucket = process.env.S3_BUCKET || '';
+const s3Region = process.env.S3_REGION || process.env.AWS_REGION || 'us-east-1';
+const s3UploadPrefix = String(process.env.S3_UPLOAD_PREFIX || 'uploads').replace(/^\/+|\/+$/g, '');
+const cloudFrontDomain = String(process.env.CLOUDFRONT_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+const s3Client = s3Bucket ? new S3Client({ region: s3Region }) : null;
+const s3Enabled = Boolean(s3Bucket && cloudFrontDomain && s3Client);
 const videoExtensions = new Set(['.mp4', '.mov', '.m4v', '.webm']);
+const imageExtensions = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif']);
+const allowedExtensions = new Set([...imageExtensions, ...videoExtensions]);
 
 fs.mkdirSync(uploadDir, { recursive: true });
 fs.mkdirSync(dataDir, { recursive: true });
@@ -43,24 +59,11 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: 120 * 1024 * 1024,
+    fileSize: uploadLimitBytes,
     files: 1,
   },
   fileFilter: (_req, file, cb) => {
     const extension = path.extname(file.originalname || '').toLowerCase();
-    const allowedExtensions = new Set([
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.gif',
-      '.webp',
-      '.heic',
-      '.heif',
-      '.mp4',
-      '.mov',
-      '.m4v',
-      '.webm',
-    ]);
 
     if (
       file.mimetype?.startsWith('image/') ||
@@ -135,6 +138,87 @@ function getMediaType(input = {}) {
   }
 
   return 'image';
+}
+
+function normalizeContentType(mimetype = '', extension = '') {
+  if (mimetype?.startsWith('image/') || mimetype?.startsWith('video/')) {
+    return mimetype;
+  }
+
+  const byExtension = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.heic': 'image/heic',
+    '.heif': 'image/heif',
+    '.mp4': 'video/mp4',
+    '.mov': 'video/quicktime',
+    '.m4v': 'video/x-m4v',
+    '.webm': 'video/webm',
+  };
+
+  return byExtension[extension] || 'application/octet-stream';
+}
+
+function sanitizeKeyPart(value = 'item') {
+  return String(value || 'item')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'item';
+}
+
+function createS3ObjectKey({ deviceId = 'guest', originalName = 'media.jpg', mimetype = '' }) {
+  const extension = path.extname(originalName || '').toLowerCase();
+  const safeExtension = allowedExtensions.has(extension)
+    ? extension
+    : mimetype.startsWith('video/')
+      ? '.mp4'
+      : '.jpg';
+  const day = new Date().toISOString().slice(0, 10);
+  const safeDeviceId = sanitizeKeyPart(deviceId).slice(0, 48);
+
+  return `${s3UploadPrefix}/${day}/${safeDeviceId}/${Date.now()}-${crypto.randomUUID()}${safeExtension}`;
+}
+
+function getCloudFrontUrl(objectKey) {
+  return `https://${cloudFrontDomain}/${objectKey}`;
+}
+
+function isSafeS3ObjectKey(objectKey = '') {
+  const key = String(objectKey || '');
+
+  return key.startsWith(`${s3UploadPrefix}/`) && !key.includes('..') && !key.startsWith('/');
+}
+
+async function putFileToS3({ filePath, objectKey, contentType }) {
+  await s3Client.send(new PutObjectCommand({
+    Bucket: s3Bucket,
+    Key: objectKey,
+    Body: fs.createReadStream(filePath),
+    ContentType: contentType,
+  }));
+}
+
+async function deleteS3Object(objectKey) {
+  if (!s3Enabled || !isSafeS3ObjectKey(objectKey)) {
+    return;
+  }
+
+  await s3Client.send(new DeleteObjectCommand({
+    Bucket: s3Bucket,
+    Key: objectKey,
+  }));
+}
+
+async function headS3Object(objectKey) {
+  return s3Client.send(new HeadObjectCommand({
+    Bucket: s3Bucket,
+    Key: objectKey,
+  }));
 }
 
 function runFfmpeg(args) {
@@ -214,6 +298,43 @@ async function normalizeUploadedMedia(file) {
   }
 }
 
+async function persistUploadedFile(file, deviceId = 'guest') {
+  if (!s3Enabled) {
+    return {
+      ...file,
+      url: `/uploads/${file.filename}`,
+      storageProvider: 'local',
+      storageKey: '',
+    };
+  }
+
+  const extension = path.extname(file.filename || file.originalname || '').toLowerCase();
+  const contentType = normalizeContentType(file.mimetype, extension);
+  const objectKey = createS3ObjectKey({
+    deviceId,
+    originalName: file.filename || file.originalname,
+    mimetype: contentType,
+  });
+  const filePath = path.join(uploadDir, file.filename);
+
+  await putFileToS3({
+    filePath,
+    objectKey,
+    contentType,
+  });
+
+  fs.unlink(filePath, () => {});
+
+  return {
+    ...file,
+    filename: path.basename(objectKey),
+    url: getCloudFrontUrl(objectKey),
+    mimetype: contentType,
+    storageProvider: 's3',
+    storageKey: objectKey,
+  };
+}
+
 async function normalizeExistingVideos() {
   const photos = readPhotos();
   let changed = false;
@@ -233,12 +354,15 @@ async function normalizeExistingVideos() {
     }
 
     try {
-      const normalized = await normalizeUploadedMedia({
-        filename,
-        originalname: photo.originalName || filename,
-        mimetype: photo.mimetype || '',
-        size: photo.size || 0,
-      });
+      const normalized = await persistUploadedFile(
+        await normalizeUploadedMedia({
+          filename,
+          originalname: photo.originalName || filename,
+          mimetype: photo.mimetype || '',
+          size: photo.size || 0,
+        }),
+        photo.deviceId || 'guest',
+      );
 
       photos[index] = {
         ...photo,
@@ -247,12 +371,75 @@ async function normalizeExistingVideos() {
         mimetype: normalized.mimetype,
         size: normalized.size,
         mediaType: 'video',
+        storageProvider: normalized.storageProvider,
+        storageKey: normalized.storageKey,
         videoCodecNormalized: true,
       };
       changed = true;
       writePhotos(photos);
     } catch (error) {
       console.error(`Falha ao normalizar vídeo ${photo.id}: ${error.message}`);
+    }
+  }
+
+  if (changed) {
+    writePhotos(photos);
+  }
+}
+
+async function migrateExistingLocalMediaToS3() {
+  if (!s3Enabled) {
+    return;
+  }
+
+  const photos = readPhotos();
+  let changed = false;
+
+  for (let index = 0; index < photos.length; index += 1) {
+    const photo = photos[index];
+
+    if (photo.storageProvider === 's3') {
+      continue;
+    }
+
+    const filename = path.basename(photo.filename || photo.url || '');
+    const filePath = path.join(uploadDir, filename);
+
+    if (!filename || !fs.existsSync(filePath)) {
+      continue;
+    }
+
+    try {
+      const baseFile = {
+        filename,
+        originalname: photo.originalName || filename,
+        mimetype: photo.mimetype || '',
+        size: photo.size || fs.statSync(filePath).size,
+      };
+      const normalizedFile =
+        getMediaType(photo) === 'video' && !photo.videoCodecNormalized
+          ? await normalizeUploadedMedia(baseFile)
+          : {
+              ...baseFile,
+              mediaType: getMediaType(photo),
+            };
+      const persisted = await persistUploadedFile(normalizedFile, photo.deviceId || 'guest');
+
+      photos[index] = {
+        ...photo,
+        filename: persisted.filename,
+        url: persisted.url,
+        mimetype: persisted.mimetype,
+        size: persisted.size,
+        mediaType: persisted.mediaType,
+        storageProvider: persisted.storageProvider,
+        storageKey: persisted.storageKey,
+        videoCodecNormalized: persisted.mediaType === 'video' ? true : photo.videoCodecNormalized || false,
+      };
+      changed = true;
+      writePhotos(photos);
+    } catch (error) {
+      console.error(`Falha ao migrar mídia ${photo.id}: ${error.message}`);
     }
   }
 
@@ -623,6 +810,125 @@ app.get('/api/challenges/progress', (req, res) => {
   });
 });
 
+app.post('/api/uploads/presign', async (req, res) => {
+  if (!s3Enabled) {
+    res.status(501).json({ error: 'Upload direto para S3 não está configurado.' });
+    return;
+  }
+
+  const deviceId = String(req.body.deviceId || '').trim().slice(0, 120);
+  const originalName = String(req.body.fileName || 'media.jpg').trim().slice(0, 180);
+  const extension = path.extname(originalName).toLowerCase();
+  const contentType = normalizeContentType(String(req.body.contentType || ''), extension);
+  const size = Number(req.body.size || 0);
+
+  if (!deviceId) {
+    res.status(400).json({ error: 'Informe o deviceId.' });
+    return;
+  }
+
+  if (!allowedExtensions.has(extension) || !contentType.startsWith('image/')) {
+    res.status(400).json({ error: 'Upload direto aceita fotos. Vídeos passam pela preparação automática.' });
+    return;
+  }
+
+  if (!Number.isFinite(size) || size <= 0 || size > uploadLimitBytes) {
+    res.status(400).json({ error: 'Arquivo inválido ou grande demais.' });
+    return;
+  }
+
+  const objectKey = createS3ObjectKey({
+    deviceId,
+    originalName,
+    mimetype: contentType,
+  });
+
+  const command = new PutObjectCommand({
+    Bucket: s3Bucket,
+    Key: objectKey,
+    ContentType: contentType,
+  });
+  const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 300 });
+
+  res.json({
+    uploadUrl,
+    objectKey,
+    publicUrl: getCloudFrontUrl(objectKey),
+    method: 'PUT',
+    expiresIn: 300,
+    headers: {
+      'Content-Type': contentType,
+    },
+  });
+});
+
+app.post('/api/photos/register', async (req, res) => {
+  if (!s3Enabled) {
+    res.status(501).json({ error: 'Registro de mídia S3 não está configurado.' });
+    return;
+  }
+
+  const objectKey = String(req.body.objectKey || '').trim();
+  const deviceId = String(req.body.deviceId || crypto.randomUUID()).slice(0, 120);
+  const mimetype = normalizeContentType(String(req.body.mimetype || ''), path.extname(objectKey).toLowerCase());
+
+  if (!isSafeS3ObjectKey(objectKey)) {
+    res.status(400).json({ error: 'Objeto S3 inválido.' });
+    return;
+  }
+
+  if (!mimetype.startsWith('image/')) {
+    res.status(400).json({ error: 'Registro direto aceita apenas fotos.' });
+    return;
+  }
+
+  let head;
+  try {
+    head = await headS3Object(objectKey);
+  } catch {
+    res.status(400).json({ error: 'A foto ainda não chegou ao bucket.' });
+    return;
+  }
+
+  const challenge = req.body.challengeId
+    ? readChallenges().find((item) => item.id === req.body.challengeId)
+    : null;
+  const photo = {
+    id: crypto.randomUUID(),
+    guestName: normalizeName(req.body.guestName),
+    deviceId,
+    mediaType: 'image',
+    reactions: normalizeReactions(req.body.reactions),
+    reactionVotes: [],
+    moderationStatus: 'pending',
+    submittedAt: new Date().toISOString(),
+    approvedAt: null,
+    rejectedAt: null,
+    moderationNote: '',
+    challenge: challenge
+      ? {
+          id: challenge.id,
+          title: challenge.title,
+          category: challenge.category,
+        }
+      : null,
+    originalName: String(req.body.originalName || path.basename(objectKey)).slice(0, 180),
+    filename: path.basename(objectKey),
+    url: getCloudFrontUrl(objectKey),
+    mimetype,
+    size: Number(head.ContentLength || req.body.size || 0),
+    storageProvider: 's3',
+    storageKey: objectKey,
+    videoCodecNormalized: false,
+    createdAt: new Date().toISOString(),
+  };
+
+  const photos = readPhotos();
+  photos.push(photo);
+  writePhotos(photos);
+  res.status(201).json({ photo: withMediaDefaults(photo) });
+});
+
 app.post('/api/photos', upload.single('photo'), async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: 'Nenhuma mídia foi enviada.' });
@@ -631,7 +937,10 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
 
   let uploadedFile;
   try {
-    uploadedFile = await normalizeUploadedMedia(req.file);
+    uploadedFile = await persistUploadedFile(
+      await normalizeUploadedMedia(req.file),
+      req.body.deviceId,
+    );
   } catch (error) {
     res.status(400).json({ error: error.message });
     return;
@@ -661,9 +970,11 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
       : null,
     originalName: uploadedFile.originalname,
     filename: uploadedFile.filename,
-    url: `/uploads/${uploadedFile.filename}`,
+    url: uploadedFile.url,
     mimetype: uploadedFile.mimetype,
     size: uploadedFile.size,
+    storageProvider: uploadedFile.storageProvider,
+    storageKey: uploadedFile.storageKey,
     videoCodecNormalized: uploadedFile.mediaType === 'video',
     createdAt: new Date().toISOString(),
   };
@@ -674,7 +985,7 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
   res.status(201).json({ photo: withMediaDefaults(photo) });
 });
 
-app.delete('/api/photos/:id', (req, res) => {
+app.delete('/api/photos/:id', async (req, res) => {
   const deviceId = String(req.body.deviceId || '').trim().slice(0, 120);
 
   if (!deviceId) {
@@ -700,7 +1011,9 @@ app.delete('/api/photos/:id', (req, res) => {
   photos.splice(index, 1);
   writePhotos(photos);
 
-  if (photo.filename) {
+  if (photo.storageProvider === 's3' && photo.storageKey) {
+    await deleteS3Object(photo.storageKey).catch(() => {});
+  } else if (photo.filename) {
     fs.unlink(path.join(uploadDir, path.basename(photo.filename)), () => {});
   }
 
@@ -844,7 +1157,9 @@ if (fs.existsSync(distDir)) {
 
 app.listen(apiPort, '0.0.0.0', () => {
   console.log(`Upload API running at http://localhost:${apiPort}`);
-  normalizeExistingVideos().catch((error) => {
-    console.error(`Falha ao normalizar vídeos existentes: ${error.message}`);
-  });
+  normalizeExistingVideos()
+    .then(() => migrateExistingLocalMediaToS3())
+    .catch((error) => {
+      console.error(`Falha ao preparar mídias existentes: ${error.message}`);
+    });
 });

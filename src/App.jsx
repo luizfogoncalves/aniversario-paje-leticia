@@ -881,31 +881,86 @@ function GuestPage() {
     });
   };
 
+  const uploadImageWithPresignedUrl = async (file, effectiveGuestName) => {
+    const contentType = file.type || 'image/jpeg';
+    const presign = await requestJson('/api/uploads/presign', {
+      method: 'POST',
+      body: JSON.stringify({
+        fileName: file.name,
+        contentType,
+        size: file.size,
+        deviceId,
+      }),
+    });
+    const uploadResponse = await fetch(presign.uploadUrl, {
+      method: presign.method || 'PUT',
+      headers: presign.headers || { 'Content-Type': contentType },
+      body: file,
+    });
+
+    if (!uploadResponse.ok) {
+      throw new Error('Não foi possível enviar a foto para o S3.');
+    }
+
+    const data = await requestJson('/api/photos/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        objectKey: presign.objectKey,
+        guestName: effectiveGuestName,
+        deviceId,
+        originalName: file.name,
+        mimetype: contentType,
+        size: file.size,
+        challengeId: challenge?.id || '',
+      }),
+    });
+
+    return data.photo;
+  };
+
+  const uploadWithServer = async (file, effectiveGuestName) => {
+    const formData = new FormData();
+    formData.append('photo', file);
+    formData.append('guestName', effectiveGuestName);
+    formData.append('deviceId', deviceId);
+    if (challenge?.id) {
+      formData.append('challengeId', challenge.id);
+    }
+
+    const response = await fetch('/api/photos', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 413) {
+        throw new Error('Essa mídia ficou grande demais. Tente outra foto ou um vídeo menor.');
+      }
+      throw new Error(data.error || 'Não foi possível enviar uma das mídias.');
+    }
+
+    const data = await response.json().catch(() => ({}));
+    return data.photo;
+  };
+
   const sendFiles = async (selectedFiles, effectiveGuestName) => {
     setUploading(true);
     setMessage('Enviando suas mídias...');
 
     try {
       for (const file of selectedFiles) {
-        const formData = new FormData();
-        formData.append('photo', file);
-        formData.append('guestName', effectiveGuestName);
-        formData.append('deviceId', deviceId);
-        if (challenge?.id) {
-          formData.append('challengeId', challenge.id);
-        }
-
-        const response = await fetch('/api/photos', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          if (response.status === 413) {
-            throw new Error('Essa mídia ficou grande demais. Tente outra foto ou um vídeo menor.');
+        if (isImageFile(file) && !isVideoFile(file)) {
+          try {
+            await uploadImageWithPresignedUrl(file, effectiveGuestName);
+          } catch (error) {
+            if (!error.message.includes('S3') && !error.message.includes('configurado')) {
+              throw error;
+            }
+            await uploadWithServer(file, effectiveGuestName);
           }
-          throw new Error(data.error || 'Não foi possível enviar uma das mídias.');
+        } else {
+          await uploadWithServer(file, effectiveGuestName);
         }
       }
 

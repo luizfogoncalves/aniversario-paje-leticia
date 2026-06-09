@@ -1,0 +1,24 @@
+{
+  "CORSRules": [
+    {
+      "AllowedHeaders": [
+        "content-type",
+        "x-amz-*"
+      ],
+      "AllowedMethods": [
+        "PUT",
+        "HEAD"
+      ],
+      "AllowedOrigins": [
+        "https://paje-leticia.appsaas.com.br",
+        "http://paje-leticia.appsaas.com.br",
+        "http://localhost:5173",
+        "http://localhost:6173"
+      ],
+      "ExposeHeaders": [
+        "ETag"
+      ],
+      "MaxAgeSeconds": 300
+    }
+  ]
+}
